@@ -35,9 +35,12 @@ onMounted(async () => {
     setStatus("✅ Jogo encerrado. Pronto para jogar novamente.", "sucesso");
   });
 
-  await listen("kill-game", () => {
+  await listen("kill-game", async () => {
+    try {
+      await invoke("kill_game");
+    } catch (_) {}
     jogoRodando.value = false;
-    setStatus("🛑 Jogo encerrado pelo sistema de segurança.", "erro");
+    setStatus("🛑 Jogo encerrado.", "info");
   });
 
   // Monitor periódico do processo
