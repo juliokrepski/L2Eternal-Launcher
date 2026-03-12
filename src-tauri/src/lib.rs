@@ -116,7 +116,6 @@ fn abrir_l2(
     gravar_patch_settings(&hwid, &token)?;
     *state.auth_token.lock().unwrap() = Some(token.clone());
 
-    // ✅ CORRIGIDO: lança l2.exe diretamente, sem PowerShell, sem UAC
     let child = Command::new(&caminho_l2)
         .current_dir(&pasta_system)
         .arg("-nointro")
@@ -126,7 +125,6 @@ fn abrir_l2(
     let pid = child.id();
     *state.game_pid.lock().unwrap() = Some(pid);
 
-    // ✅ CORRIGIDO: esconde para o tray ao invés de minimizar
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
@@ -269,6 +267,32 @@ async fn atualizar_arquivos() -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+
+    // ── Auto-elevação: relança como admin se necessário ──
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let is_admin = Command::new("net")
+            .args(["session"])
+            .creation_flags(0x08000000)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !is_admin {
+            let exe = env::current_exe().unwrap();
+            Command::new("powershell")
+                .args([
+                    "-WindowStyle", "Hidden",
+                    "-Command",
+                    &format!("Start-Process '{}' -Verb RunAs", exe.display()),
+                ])
+                .spawn()
+                .unwrap();
+            std::process::exit(0);
+        }
+    }
+
     let state = LauncherState {
         game_pid:   Mutex::new(None),
         auth_token: Mutex::new(None),
