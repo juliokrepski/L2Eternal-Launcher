@@ -1,0 +1,31 @@
+[package]
+name = "launcher_l2eternal"
+version = "0.1.0"
+description = "L2 Eternal Launcher"
+authors = ["L2 Eternal"]
+edition = "2021"
+
+[lib]
+name = "launcher_l2eternal_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri                        = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener          = "2"
+tauri-plugin-single-instance = "2"
+serde                        = { version = "1", features = ["derive"] }
+serde_json                   = "1"
+sha2                         = "0.10"
+machine-uid                  = "0.5"
+sysinfo                      = "0.33"
+reqwest                      = { version = "0.12", features = ["json"] }
+tokio                        = { version = "1", features = ["full"] }
+notify                       = "6"
+
+[features]
+default = []
+custom-protocol = ["tauri/custom-protocol"]
+
