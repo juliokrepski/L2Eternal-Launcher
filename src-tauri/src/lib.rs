@@ -1,4 +1,4 @@
-﻿use sha2::{Sha256, Digest};
+use sha2::{Sha256, Digest};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -56,20 +56,7 @@ fn deletar_patch_settings() {
     let _ = fs::remove_file(ini_path);
 }
 
-fn processo_l2_rodando() -> bool {
-    match Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq l2.exe", "/NH", "/FO", "CSV"])
-        .output()
-    {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).to_lowercase().contains("l2.exe"),
-        Err(_)  => false,
-    }
-}
-
 // ─── Verificação de integridade (apenas na hora de abrir o jogo) ──────────────
-// Consulta o patchlist.json remoto e compara os hashes de Interface.u e
-// L2Guard.dll locais. Se divergirem, o jogo não é aberto.
-// Sem watcher em runtime — zero interferência durante o jogo.
 
 async fn verificar_integridade() -> Result<(), String> {
     let url_patchlist = "https://l2eternal.org/patch/patchlist.json";
@@ -85,14 +72,12 @@ async fn verificar_integridade() -> Result<(), String> {
         .await
         .map_err(|e| format!("Erro ao ler patchlist: {}", e))?;
 
-    // Arquivos críticos que devem ter integridade garantida
     let criticos = ["system/Interface.u", "system/L2Guard.dll"];
 
     for arquivo in &criticos {
-        // Se o arquivo não está no patchlist, ignora (ex: L2Guard.dll ainda não publicado)
         let hash_remoto = match patchlist.get(*arquivo) {
             Some(h) => h,
-            None    => continue,
+            None    => continue, // arquivo ainda não publicado no patchlist, ignora
         };
 
         let caminho    = root_dir.join(arquivo.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -101,7 +86,7 @@ async fn verificar_integridade() -> Result<(), String> {
 
         if &hash_local != hash_remoto {
             return Err(format!(
-                "Arquivo modificado ou corrompido: {}. Execute a atualização antes de jogar.",
+                "Arquivo modificado ou corrompido: {}.\nExecute a atualização antes de jogar.",
                 arquivo
             ));
         }
@@ -157,7 +142,7 @@ async fn abrir_l2(
         }
     }
 
-    // Verificação de integridade antes de abrir — única checagem, sem watcher
+    // Verificação de integridade — única checagem, feita antes de abrir
     verificar_integridade().await?;
 
     gravar_patch_settings(&hwid, &token)?;
@@ -176,13 +161,13 @@ async fn abrir_l2(
         let _ = window.hide();
     }
 
-    // Monitor leve: apenas verifica se o processo encerrou (sem tocar em arquivos)
+    // Monitor leve: usa sysinfo em memória, zero processo filho spawnado
     let app_monitor = app.clone();
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_secs(5));
         loop {
             thread::sleep(std::time::Duration::from_secs(3));
-            if !processo_l2_rodando() {
+            if !pid_is_running(pid) {
                 deletar_patch_settings();
                 if let Some(window) = app_monitor.get_webview_window("main") {
                     let _ = window.emit("game-closed", ());
