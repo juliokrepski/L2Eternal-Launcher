@@ -14,9 +14,9 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, AppHandle, Emitter, WindowEvent,
 };
-use notify::{Watcher, RecursiveMode};
 
 // ─── Estado global ────────────────────────────────────────────────────────────
+
 struct LauncherState {
     game_pid:   Mutex<Option<u32>>,
     auth_token: Mutex<Option<String>>,
@@ -66,6 +66,50 @@ fn processo_l2_rodando() -> bool {
     }
 }
 
+// ─── Verificação de integridade (apenas na hora de abrir o jogo) ──────────────
+// Consulta o patchlist.json remoto e compara os hashes de Interface.u e
+// L2Guard.dll locais. Se divergirem, o jogo não é aberto.
+// Sem watcher em runtime — zero interferência durante o jogo.
+
+async fn verificar_integridade() -> Result<(), String> {
+    let url_patchlist = "https://l2eternal.org/patch/patchlist.json";
+    let root_dir      = get_launcher_dir();
+    let client        = reqwest::Client::new();
+
+    let patchlist: HashMap<String, String> = client
+        .get(url_patchlist)
+        .send()
+        .await
+        .map_err(|e| format!("Erro ao buscar patchlist: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Erro ao ler patchlist: {}", e))?;
+
+    // Arquivos críticos que devem ter integridade garantida
+    let criticos = ["system/Interface.u", "system/L2Guard.dll"];
+
+    for arquivo in &criticos {
+        // Se o arquivo não está no patchlist, ignora (ex: L2Guard.dll ainda não publicado)
+        let hash_remoto = match patchlist.get(*arquivo) {
+            Some(h) => h,
+            None    => continue,
+        };
+
+        let caminho    = root_dir.join(arquivo.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let hash_local = get_local_hash(&caminho)
+            .ok_or_else(|| format!("Arquivo não encontrado: {}", arquivo))?;
+
+        if &hash_local != hash_remoto {
+            return Err(format!(
+                "Arquivo modificado ou corrompido: {}. Execute a atualização antes de jogar.",
+                arquivo
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 // ─── Comandos Tauri ───────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -92,11 +136,11 @@ fn scan_anti_hack() -> bool {
 }
 
 #[tauri::command]
-fn abrir_l2(
+async fn abrir_l2(
     token: String,
     hwid: String,
     _login: String,
-    state: tauri::State<LauncherState>,
+    state: tauri::State<'_, LauncherState>,
     app: AppHandle,
 ) -> Result<u32, String> {
     let root_dir     = get_launcher_dir();
@@ -112,6 +156,9 @@ fn abrir_l2(
             return Err("O jogo já está rodando!".into());
         }
     }
+
+    // Verificação de integridade antes de abrir — única checagem, sem watcher
+    verificar_integridade().await?;
 
     gravar_patch_settings(&hwid, &token)?;
     *state.auth_token.lock().unwrap() = Some(token.clone());
@@ -129,8 +176,7 @@ fn abrir_l2(
         let _ = window.hide();
     }
 
-    iniciar_watcher(pasta_system.clone(), app.clone());
-
+    // Monitor leve: apenas verifica se o processo encerrou (sem tocar em arquivos)
     let app_monitor = app.clone();
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_secs(5));
@@ -177,44 +223,6 @@ fn get_game_status(state: tauri::State<LauncherState>) -> bool {
     } else {
         false
     }
-}
-
-// ─── Watcher ──────────────────────────────────────────────────────────────────
-// Monitora APENAS os dois arquivos críticos individualmente.
-// A versão anterior usava RecursiveMode::Recursive na pasta system/ inteira,
-// o que causava piscar de tela pois o l2.exe lê/escreve dezenas de arquivos
-// durante o jogo (logs, configs, saves).
-
-fn iniciar_watcher(path: PathBuf, app: AppHandle) {
-    thread::spawn(move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        let mut watcher = match notify::recommended_watcher(tx) {
-            Ok(w)  => w,
-            Err(e) => { eprintln!("Falha ao criar watcher: {}", e); return; }
-        };
-
-        // Registra watch apenas nos arquivos protegidos, não na pasta inteira
-        let protegidos = ["Interface.u", "L2Guard.dll"];
-        for arquivo in &protegidos {
-            let caminho = path.join(arquivo);
-            if caminho.exists() {
-                if let Err(e) = watcher.watch(&caminho, RecursiveMode::NonRecursive) {
-                    eprintln!("Watcher: erro ao observar {}: {}", arquivo, e);
-                }
-            }
-        }
-
-        // Qualquer modificação nesses arquivos = sessão encerrada
-        for res in rx {
-            if let Ok(_event) = res {
-                deletar_patch_settings();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("kill-game", ());
-                }
-            }
-        }
-    });
 }
 
 // ─── Atualização ──────────────────────────────────────────────────────────────
@@ -274,7 +282,6 @@ async fn atualizar_arquivos() -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
 
-    // ── Auto-elevação: relança como admin se necessário ──
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
