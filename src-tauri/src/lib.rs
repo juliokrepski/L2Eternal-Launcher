@@ -1,4 +1,4 @@
-use sha2::{Sha256, Digest};
+﻿use sha2::{Sha256, Digest};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -179,39 +179,45 @@ fn get_game_status(state: tauri::State<LauncherState>) -> bool {
     }
 }
 
-// ─── Watcher ─────────────────────────────────────────────────────────────────
+// ─── Watcher ──────────────────────────────────────────────────────────────────
+// Monitora APENAS os dois arquivos críticos individualmente.
+// A versão anterior usava RecursiveMode::Recursive na pasta system/ inteira,
+// o que causava piscar de tela pois o l2.exe lê/escreve dezenas de arquivos
+// durante o jogo (logs, configs, saves).
 
 fn iniciar_watcher(path: PathBuf, app: AppHandle) {
     thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel();
+
         let mut watcher = match notify::recommended_watcher(tx) {
             Ok(w)  => w,
             Err(e) => { eprintln!("Falha ao criar watcher: {}", e); return; }
         };
-        let _ = watcher.watch(&path, RecursiveMode::Recursive);
+
+        // Registra watch apenas nos arquivos protegidos, não na pasta inteira
         let protegidos = ["Interface.u", "L2Guard.dll"];
+        for arquivo in &protegidos {
+            let caminho = path.join(arquivo);
+            if caminho.exists() {
+                if let Err(e) = watcher.watch(&caminho, RecursiveMode::NonRecursive) {
+                    eprintln!("Watcher: erro ao observar {}: {}", arquivo, e);
+                }
+            }
+        }
+
+        // Qualquer modificação nesses arquivos = sessão encerrada
         for res in rx {
-            if let Ok(event) = res {
-                let alterou = event.paths.iter().any(|p| {
-                    p.file_name()
-                        .map(|n| {
-                            let n = n.to_string_lossy();
-                            protegidos.iter().any(|&prot| n == prot)
-                        })
-                        .unwrap_or(false)
-                });
-                if alterou {
-                    deletar_patch_settings();
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("kill-game", ());
-                    }
+            if let Ok(_event) = res {
+                deletar_patch_settings();
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.emit("kill-game", ());
                 }
             }
         }
     });
 }
 
-// ─── Atualização ─────────────────────────────────────────────────────────────
+// ─── Atualização ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn atualizar_arquivos() -> Result<String, String> {
@@ -263,7 +269,7 @@ async fn atualizar_arquivos() -> Result<String, String> {
     }
 }
 
-// ─── Run ─────────────────────────────────────────────────────────────────────
+// ─── Run ──────────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
