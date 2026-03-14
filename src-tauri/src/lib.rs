@@ -15,18 +15,14 @@ use tauri::{
     Manager, AppHandle, Emitter, WindowEvent,
 };
 
-// ─── Estado global ────────────────────────────────────────────────────────────
-
 struct LauncherState {
     game_pid:   Mutex<Option<u32>>,
     auth_token: Mutex<Option<String>>,
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 fn get_launcher_dir() -> PathBuf {
-    let exe = env::current_exe().expect("Não foi possível localizar o executável");
-    exe.parent().expect("Não foi possível achar a pasta raiz").to_path_buf()
+    let exe = env::current_exe().expect("Nao foi possivel localizar o executavel");
+    exe.parent().expect("Nao foi possivel achar a pasta raiz").to_path_buf()
 }
 
 fn get_local_hash(path: &Path) -> Option<String> {
@@ -46,7 +42,7 @@ fn pid_is_running(pid: u32) -> bool {
 
 fn gravar_patch_settings(hwid: &str, token: &str) -> Result<(), String> {
     let ini_path = get_launcher_dir().join("system").join("PatchSettings.ini");
-    let conteudo = format!("[L2Guard]\nHWID={}\nTOKEN={}\n", hwid, token);
+    let conteudo = format!("[PatchSettings]\r\nHWID={}\r\nTOKEN={}\r\n", hwid, token);
     fs::write(&ini_path, conteudo)
         .map_err(|e| format!("Erro ao gravar PatchSettings.ini: {}", e))
 }
@@ -55,8 +51,6 @@ fn deletar_patch_settings() {
     let ini_path = get_launcher_dir().join("system").join("PatchSettings.ini");
     let _ = fs::remove_file(ini_path);
 }
-
-// ─── Verificação de integridade (apenas na hora de abrir o jogo) ──────────────
 
 async fn verificar_integridade() -> Result<(), String> {
     let url_patchlist = "https://l2eternal.org/patch/patchlist.json";
@@ -77,16 +71,16 @@ async fn verificar_integridade() -> Result<(), String> {
     for arquivo in &criticos {
         let hash_remoto = match patchlist.get(*arquivo) {
             Some(h) => h,
-            None    => continue, // arquivo ainda não publicado no patchlist, ignora
+            None    => continue,
         };
 
         let caminho    = root_dir.join(arquivo.replace('/', std::path::MAIN_SEPARATOR_STR));
         let hash_local = get_local_hash(&caminho)
-            .ok_or_else(|| format!("Arquivo não encontrado: {}", arquivo))?;
+            .ok_or_else(|| format!("Arquivo nao encontrado: {}", arquivo))?;
 
         if &hash_local != hash_remoto {
             return Err(format!(
-                "Arquivo modificado ou corrompido: {}.\nExecute a atualização antes de jogar.",
+                "Arquivo modificado ou corrompido: {}.\nExecute a atualizacao antes de jogar.",
                 arquivo
             ));
         }
@@ -94,8 +88,6 @@ async fn verificar_integridade() -> Result<(), String> {
 
     Ok(())
 }
-
-// ─── Comandos Tauri ───────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn get_hwid() -> String {
@@ -133,16 +125,15 @@ async fn abrir_l2(
     let pasta_system = root_dir.join("system");
 
     if !caminho_l2.exists() {
-        return Err(format!("l2.exe não encontrado em: {}", caminho_l2.display()));
+        return Err(format!("l2.exe nao encontrado em: {}", caminho_l2.display()));
     }
 
     if let Some(pid) = *state.game_pid.lock().unwrap() {
         if pid_is_running(pid) {
-            return Err("O jogo já está rodando!".into());
+            return Err("O jogo ja esta rodando!".into());
         }
     }
 
-    // Verificação de integridade — única checagem, feita antes de abrir
     verificar_integridade().await?;
 
     gravar_patch_settings(&hwid, &token)?;
@@ -161,7 +152,6 @@ async fn abrir_l2(
         let _ = window.hide();
     }
 
-    // Monitor leve: usa sysinfo em memória, zero processo filho spawnado
     let app_monitor = app.clone();
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_secs(5));
@@ -169,10 +159,7 @@ async fn abrir_l2(
             thread::sleep(std::time::Duration::from_secs(3));
             if !pid_is_running(pid) {
                 deletar_patch_settings();
-                if let Some(window) = app_monitor.get_webview_window("main") {
-                    let _ = window.emit("game-closed", ());
-                    let _ = window.show();
-                }
+                app_monitor.exit(0);
                 break;
             }
         }
@@ -209,8 +196,6 @@ fn get_game_status(state: tauri::State<LauncherState>) -> bool {
         false
     }
 }
-
-// ─── Atualização ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn atualizar_arquivos() -> Result<String, String> {
@@ -256,13 +241,11 @@ async fn atualizar_arquivos() -> Result<String, String> {
     }
 
     if atualizados == 0 {
-        Ok("Todos os arquivos estão atualizados!".to_string())
+        Ok("Todos os arquivos estao atualizados!".to_string())
     } else {
         Ok(format!("{} arquivo(s) atualizado(s)!", atualizados))
     }
 }
-
-// ─── Run ──────────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -308,9 +291,8 @@ pub fn run() {
         .manage(state)
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Mostrar Launcher", true, None::<&str>)?;
-            let kill_i = MenuItem::with_id(app, "kill", "Fechar Jogo",      true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Sair do Launcher", true, None::<&str>)?;
-            let menu   = Menu::with_items(app, &[&show_i, &kill_i, &quit_i])?;
+            let quit_i = MenuItem::with_id(app, "quit", "Fechar",           true, None::<&str>)?;
+            let menu   = Menu::with_items(app, &[&show_i, &quit_i])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -319,15 +301,12 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app: &AppHandle, event| match event.id.as_ref() {
                     "quit" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.emit("kill-game", ());
-                        }
+                        Command::new("taskkill")
+                            .args(["/F", "/IM", "l2.exe", "/T"])
+                            .output()
+                            .ok();
+                        deletar_patch_settings();
                         app.exit(0);
-                    }
-                    "kill" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.emit("kill-game", ());
-                        }
                     }
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
